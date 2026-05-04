@@ -955,9 +955,9 @@ struct MDirApp {
         let safeWidth = max(20, size.cols - 2)
         let paneWidth = useDualPane ? max(20, (safeWidth - 1) / 2) : safeWidth
         var body = ""
-        let headerText = " Shell File Manager  Copyright : jayusop(jayusop@sk.com)  Sort:\(state.sortMode.title)  Hidden:\(state.showHidden ? "ON" : "OFF")"
+        let headerText = " Shell File Manager  Copyright : jayusop(jayusop@gmail.com)  Sort:\(state.sortMode.title)  Hidden:\(state.showHidden ? "ON" : "OFF")"
         if compatMode {
-            body += truncateVisible("MDIR 0.2 | Shell File Manager | Copyright : jayusop(jayusop@sk.com) | Sort:\(state.sortMode.title) | Hidden:\(state.showHidden ? "ON" : "OFF")", to: safeWidth) + "\u{001B}[K\n"
+            body += truncateVisible("MDIR 0.2 | Shell File Manager | Copyright : jayusop(jayusop@gmail.com) | Sort:\(state.sortMode.title) | Hidden:\(state.showHidden ? "ON" : "OFF")", to: safeWidth) + "\u{001B}[K\n"
         } else {
             body += color(" MDIR 0.2 ", code: "46;30") + truncateVisible(headerText, to: max(0, safeWidth - 10)) + "\u{001B}[K\n"
         }
