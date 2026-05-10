@@ -117,6 +117,7 @@ final class TerminalSession {
     private var lastBody = ""
     private var lastStatus = ""
     private var pendingBytes: [UInt8] = []
+    private let usesAlternateScreen = ProcessInfo.processInfo.environment["TERM_PROGRAM"] != "Apple_Terminal"
 
     func begin() throws {
         // interactive 모드는 실제 TTY에서만 동작 가능하다.
@@ -142,13 +143,19 @@ final class TerminalSession {
         // begin/end 진입 시 캐시를 비운다.
         lastBody = ""
         lastStatus = ""
-        write("\u{001B}[?1049h\u{001B}[?25l\u{001B}[2J\u{001B}[H")
+        if usesAlternateScreen {
+            write("\u{001B}[?1049h\u{001B}[?25l\u{001B}[2J\u{001B}[H")
+        } else {
+            write("\u{001B}[H\u{001B}[2J")
+        }
     }
 
     func end() {
         guard active else { return }
         _ = tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
-        write("\u{001B}[?25h\u{001B}[?1049l")
+        if usesAlternateScreen {
+            write("\u{001B}[?25h\u{001B}[?1049l")
+        }
         active = false
         lastBody = ""
         lastStatus = ""
@@ -158,7 +165,22 @@ final class TerminalSession {
         FileHandle.standardOutput.write(Data(text.utf8))
     }
 
-    func render(body: String, status: String, statusRow: Int) {
+    func render(body: String, status: String, statusRow: Int, fullRefresh: Bool = false) {
+        if fullRefresh {
+            // Apple Terminal 호환 모드에서는 부분 갱신보다 전체 재렌더가 안전하다.
+            // 커서 위치/자동 줄바꿈 상태가 남아 있으면 행 정렬이 쉽게 무너질 수 있다.
+            lastBody = body
+            lastStatus = status
+            write("\u{001B}[H\u{001B}[2J")
+            write(body)
+            if !status.isEmpty {
+                write("\u{001B}[\(statusRow);1H")
+                write(status)
+                write("\u{001B}[J")
+            }
+            return
+        }
+
         // body 와 status 를 나눠 캐시하면
         // 하단 상태줄만 바뀌는 경우 전체 패널을 다시 그리지 않아 깜빡임이 줄어든다.
         if body != lastBody {
@@ -292,10 +314,6 @@ struct MDirApp {
         // 3) 인터랙티브/배치 모드 선택
         // 순서로 진행한다.
         let options = try parse(Array(CommandLine.arguments.dropFirst()))
-        if isAppleTerminal() {
-            print("mdir: Apple built-in terminals are not currently supported; they will be supported in the future.")
-            return
-        }
         if options.showHelp {
             printHelp()
             return
@@ -405,7 +423,7 @@ struct MDirApp {
         if paths.count == 2 {
             let left = try loadDirectory(path: paths[0], options: options)
             let right = try loadDirectory(path: paths[1], options: options)
-            print("MDIR 0.2 | Shell file manager")
+            print("MDIR 0.3 | Shell file manager")
             print("LEFT  \(paths[0])")
             print("RIGHT \(paths[1])")
             print("")
@@ -420,7 +438,7 @@ struct MDirApp {
         }
 
         let entries = try loadDirectory(path: paths[0], options: options)
-        print("MDIR 0.2 | Shell file manager")
+        print("MDIR 0.3 | Shell file manager")
         print("Directory of \(paths[0])")
         print("")
         for entry in entries {
@@ -439,7 +457,7 @@ struct MDirApp {
             activePane: 0,
             showHidden: options.showHidden,
             sortMode: options.sortMode,
-            helpLine: "L/R Tab Enter O Bksp E P H/S/C/R/Q",
+            helpLine: "Left/Right Tab Enter Open Backspace Edit Perm Hidden Sort Compare Refresh Quit",
             infoLine: "",
             permissionInput: nil
         )
@@ -951,15 +969,56 @@ struct MDirApp {
         let size = terminal.size()
         let compatMode = isAppleTerminal()
         let paneHeight = max(8, size.rows - 6)
-        let useDualPane = size.cols >= 80 && !compatMode
+        let useDualPane = size.cols >= 80
         let safeWidth = max(20, size.cols - 2)
         let paneWidth = useDualPane ? max(20, (safeWidth - 1) / 2) : safeWidth
-        var body = ""
         let headerText = " Shell File Manager  Copyright : jayusop(jayusop@gmail.com)  Sort:\(state.sortMode.title)  Hidden:\(state.showHidden ? "ON" : "OFF")"
         if compatMode {
-            body += truncateVisible("MDIR 0.2 | Shell File Manager | Copyright : jayusop(jayusop@gmail.com) | Sort:\(state.sortMode.title) | Hidden:\(state.showHidden ? "ON" : "OFF")", to: safeWidth) + "\u{001B}[K\n"
+            let bodyHeight = max(1, size.rows - 3)
+            let paneLines: [String]
+            if useDualPane {
+                let leftLines = appleTerminalPaneLines(
+                    for: state.panes[0],
+                    label: "Left",
+                    isActive: state.activePane == 0,
+                    height: bodyHeight,
+                    width: paneWidth
+                )
+                let rightLines = appleTerminalPaneLines(
+                    for: state.panes[1],
+                    label: "Right",
+                    isActive: state.activePane == 1,
+                    height: bodyHeight,
+                    width: paneWidth
+                )
+                paneLines = appleTerminalDualPaneLines(left: leftLines, right: rightLines, width: paneWidth)
+            } else {
+                let activePane = state.panes[state.activePane]
+                paneLines = appleTerminalPaneLines(
+                    for: activePane,
+                    label: state.activePane == 0 ? "Left" : "Right",
+                    isActive: true,
+                    height: bodyHeight,
+                    width: paneWidth
+                )
+            }
+            let frame = appleTerminalFrame(
+                header: "MDIR 0.3 | Shell File Manager | Copyright : jayusop(jayusop@gmail.com) | Sort:\(state.sortMode.title) | Hidden:\(state.showHidden ? "ON" : "OFF")",
+                paneLines: paneLines,
+                helpLine: state.helpLine,
+                infoLine: state.infoLine,
+                rows: size.rows,
+                width: safeWidth
+            )
+            terminal.render(body: frame, status: "", statusRow: 1, fullRefresh: true)
+            return
+        }
+
+        var body = ""
+        if compatMode {
+            body += appleTerminalLine("MDIR 0.3 | Shell File Manager | Copyright : jayusop(jayusop@gmail.com) | Sort:\(state.sortMode.title) | Hidden:\(state.showHidden ? "ON" : "OFF")", width: safeWidth) + "\n"
         } else {
-            body += color(" MDIR 0.2 ", code: "46;30") + truncateVisible(headerText, to: max(0, safeWidth - 10)) + "\u{001B}[K\n"
+            body += color(" MDIR 0.3 ", code: "46;30") + truncateVisible(headerText, to: max(0, safeWidth - 10)) + "\u{001B}[K\n"
         }
 
         if useDualPane && !compatMode {
@@ -973,24 +1032,86 @@ struct MDirApp {
             }
         } else {
             let activePane = state.panes[state.activePane]
-            let lines = paneLines(for: activePane, isActive: true, height: paneHeight, width: paneWidth, useColor: !compatMode)
+            let lines = paneLines(for: activePane, isActive: true, height: paneHeight, width: paneWidth, useColor: true)
             for line in lines {
-                body += line + "\u{001B}[K\n"
+                if compatMode {
+                    body += appleTerminalLine(line, width: paneWidth) + "\n"
+                } else {
+                    body += line + "\u{001B}[K\n"
+                }
             }
         }
 
         let status: String
-        if compatMode {
-            let footer = truncateVisible("\(state.helpLine) \(state.infoLine)", to: safeWidth)
-            status = safePlainLine(footer, width: safeWidth) + "\n"
-        } else {
-            status =
-                safePlainLine(String(repeating: "-", count: safeWidth), width: safeWidth) + "\n" +
-                safePlainLine(state.helpLine, width: safeWidth) + "\n" +
-                safePlainLine(state.infoLine, width: safeWidth) + "\n"
-        }
+        status =
+            safePlainLine(String(repeating: "-", count: safeWidth), width: safeWidth) + "\n" +
+            safePlainLine(state.helpLine, width: safeWidth) + "\n" +
+            safePlainLine(state.infoLine, width: safeWidth) + "\n"
 
         terminal.render(body: body, status: status, statusRow: max(1, paneHeight + 2))
+    }
+
+    private func appleTerminalFrame(header: String, paneLines: [String], helpLine: String, infoLine: String, rows: Int, width: Int) -> String {
+        var lines: [String] = []
+        lines.append(appleTerminalLine(header, width: width))
+        lines.append(contentsOf: paneLines.map { appleTerminalLine($0, width: width) })
+
+        let footerLines = [
+            appleTerminalLine(helpLine, width: width),
+            appleTerminalLine(infoLine, width: width)
+        ]
+        let targetBodyRows = max(0, rows - footerLines.count - 1)
+        if lines.count < targetBodyRows {
+            lines.append(contentsOf: Array(repeating: appleTerminalLine("", width: width), count: targetBodyRows - lines.count))
+        } else if lines.count > targetBodyRows {
+            lines = Array(lines.prefix(targetBodyRows))
+        }
+        lines.append(contentsOf: footerLines)
+        // raw mode에서는 \n 만으로는 다음 줄의 1열로 돌아가지 않는다.
+        // Apple Terminal 호환 프레임은 각 행을 \r\n 으로 끝내서 항상 좌측에서 시작하게 한다.
+        return lines.joined(separator: "\r\n") + "\r\n"
+    }
+
+    private func appleTerminalDualPaneLines(left: [String], right: [String], width: Int) -> [String] {
+        let rows = max(left.count, right.count)
+        var lines: [String] = []
+        for row in 0..<rows {
+            let leftLine = row < left.count ? appleTerminalLine(left[row], width: width) : appleTerminalLine("", width: width)
+            let rightLine = row < right.count ? appleTerminalLine(right[row], width: width) : appleTerminalLine("", width: width)
+            lines.append(leftLine + " " + rightLine)
+        }
+        return lines
+    }
+
+    private func appleTerminalPaneLines(for pane: PaneState, label: String, isActive: Bool, height: Int, width: Int) -> [String] {
+        // Apple Terminal 에서는 ANSI 없이 plain-text 레이아웃만 사용한다.
+        // 폭이 넓으면 좌/우 패널을, 좁으면 단일 패널을 같은 포맷으로 그린다.
+        var lines: [String] = []
+        let prefix = isActive ? "*" : " "
+        let title = "\(prefix)\(label): " + truncateVisible(pane.currentPath, to: max(1, width - label.count - 4))
+        lines.append(title)
+        lines.append(String(repeating: "-", count: max(1, min(width - 1, 24))))
+
+        var pane = pane
+        let visibleRows = max(1, height - 2)
+        if pane.selectedIndex < pane.scrollOffset {
+            pane.scrollOffset = pane.selectedIndex
+        } else if pane.selectedIndex >= pane.scrollOffset + visibleRows {
+            pane.scrollOffset = pane.selectedIndex - visibleRows + 1
+        }
+
+        let rangeEnd = min(pane.items.count, pane.scrollOffset + visibleRows)
+        for row in pane.scrollOffset..<rangeEnd {
+            let entry = pane.items[row]
+            let marker = row == pane.selectedIndex ? ">" : " "
+            let name = truncateVisible(displayName(for: entry), to: max(1, width - 3))
+            lines.append("\(marker) \(name)")
+        }
+
+        while lines.count < height {
+            lines.append("")
+        }
+        return lines
     }
 
     private func paneLines(for pane: PaneState, isActive: Bool, height: Int, width: Int, useColor: Bool) -> [String] {
@@ -1211,7 +1332,7 @@ struct MDirApp {
 
     private func printCompare(left: String, right: String) throws {
         let result = try compareFiles(left: left, right: right)
-        print("MDIR 0.2 | Shell file manager")
+        print("MDIR 0.3 | Shell file manager")
         print("Compare files")
         print("left : \(left)")
         print("right: \(right)")
@@ -1297,6 +1418,13 @@ struct MDirApp {
         return truncateVisible(text, to: visibleWidth) + "\u{001B}[K"
     }
 
+    private func appleTerminalLine(_ text: String, width: Int) -> String {
+        // Apple Terminal 호환 경로에서는 ESC[K를 완전히 쓰지 않는다.
+        // 대신 마지막 1컬럼을 비워 두고, 나머지는 공백으로 직접 채워 이전 내용을 덮는다.
+        let visibleWidth = max(1, width - 1)
+        return padVisible(text, to: visibleWidth)
+    }
+
     private func isAppleTerminal() -> Bool {
         ProcessInfo.processInfo.environment["TERM_PROGRAM"] == "Apple_Terminal"
     }
@@ -1314,7 +1442,7 @@ struct MDirApp {
     private func printHelp() {
         Swift.print(
             """
-            MDIR 0.2 - Shell file manager
+            MDIR 0.3 - Shell file manager
 
             Usage:
               mdir

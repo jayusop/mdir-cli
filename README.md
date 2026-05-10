@@ -1,13 +1,14 @@
 # mdir-cli
 
 `mdir` 0.2 is a macOS CLI inspired by the direction of the reference project at `/Users/jayusop/Develop/codex/mdir`.
-It combines the feel of classic DOS-era `MDIR` with a shell-oriented file manager, built around a dual-pane terminal UI.
+It combines the feel of classic DOS-era `MDIR` with a shell-oriented file manager, built around a pane-based terminal UI.
 
 Key features:
 
-- Runs as an interactive dual-pane file manager in a TTY
+- Runs as an interactive pane-based file manager in a TTY
 - When given one path, opens both left and right panes at the same starting location
 - When given two directories, uses them as the initial left and right pane paths
+- In Apple Terminal, renders only the active pane for compatibility
 - When given two files, compares file size and the offset of the first difference
 - Displays POSIX permissions, owner, group, modified time, and size
 - Recognizes `.app` directories as application bundles and can launch them
@@ -106,6 +107,11 @@ MDIR_FORCE_BATCH=1 ./.build/debug/mdir /path/to/directory
 - `R`: Refresh
 - `Q`: Quit
 
+Apple Terminal compatibility:
+
+- In macOS built-in Terminal, `mdir` shows only one pane at a time
+- `Left`, `Right`, and `Tab` still switch the active pane behind that single-view layout
+
 ## Startup Options
 
 - `/h` or `/?`: Show help
@@ -121,5 +127,5 @@ MDIR_FORCE_BATCH=1 ./.build/debug/mdir /path/to/directory
 
 ## Compare
 
-- When given two directories, displays them side by side in a left/right pane layout
+- When given two directories, displays them side by side in a left/right pane layout when the terminal supports it
 - When given two files, compares their sizes and the position of the first difference
